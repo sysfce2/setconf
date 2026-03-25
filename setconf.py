@@ -51,7 +51,7 @@ def bs(x):
 
 NL = bs(linesep_str)
 ASSIGNMENTS = [b'==', b'=>', b'+=', b'-=', b'?=',
-               b'=', b':=', b'::', b':', b'is']
+               b'=', b':=', b'::', b':', b' is ']
 SINGLE_LINE_COMMENTS = [b"#", b"//", b"--"]
 MULTI_LINE_COMMENTS = [b"/*"]
 
@@ -109,12 +109,12 @@ def changeline(line, newvalue):
     line = bs(line)
     newvalue = bs(newvalue)
 
-    if b"=" in line and b"#" in line and line.index(b"=") < line.index(b"#"):
+    if b"=" in line and b" #" in line and line.index(b"=") < line.index(b" #"):
         # special case for "=" assignments followed by a "#" comment
-        line = line[:line.index(b"#")]
-    elif b"=" in line and b"//" in line and line.index(b"=") < line.index(b"//"):
+        line = line[:line.index(b" #")]
+    elif b"=" in line and b" //" in line and line.index(b"=") < line.index(b" //"):
         # special case for "=" assignments followed by a "//" comment
-        line = line[:line.index(b"//")]
+        line = line[:line.index(b" //")]
 
     first = firstpart(line)
 
@@ -125,9 +125,9 @@ def changeline(line, newvalue):
             return first + b"\t" + newvalue
         else:
             # Special case for Linux kernel configuration files
-            if first.endswith(b" is"):
+            if first.endswith(b" is "):
                 # Use "=" instead of "is" when setting a config value to "=y" for instance
-                first = first[:-3] + b"="
+                first = first[:-4] + b"="
             return first + newvalue
     else:
         return line
@@ -378,14 +378,14 @@ def addtofile(filename, line):
     try:
         with open(filename, 'rb') as f:
             data = f.read()
-            lines = data.split(NL)[:-1]
+            lines = data.split(NL)
     except IOError:
         print("Can't read %s" % (filename))
         sysexit(2)
+    if lines and lines[-1] == b'':
+        lines = lines[:-1]
     if data.strip() == b"":
         lines = []
-    elif NL not in data:
-        lines = [data]
     # Change and write the file
     try:
         with open(filename, 'wb') as f:
@@ -670,8 +670,7 @@ def changefile_multiline(filename, key, value, endstring=b"\n"):
     try:
         with open(filename, 'wb') as f:
             f.write(new_contents)
-    except:  # UnicodeEncodeError: not supported by shedskin
-        #print("codeEncodeError: Can't change value for %s" % (filename))
+    except Exception:
         print("Can't change value for %s" % (filename))
         sysexit(2)
 
@@ -831,7 +830,9 @@ def create_if_missing(filename):
 
 def has_key(data, key):
     """Check if the given key exists in the given data."""
-    lines = data.split(NL)[:-1]
+    lines = data.split(NL)
+    if lines and lines[-1] == b'':
+        lines = lines[:-1]
     for line in lines:
         if not line.strip():
             # Skip blank lines
@@ -844,7 +845,9 @@ def has_key(data, key):
 
 def get_value(data, key):
     """Return the first value for a given key."""
-    lines = data.split(NL)[:-1]
+    lines = data.split(NL)
+    if lines and lines[-1] == b'':
+        lines = lines[:-1]
     for line in lines:
         if not line.strip():
             # Skip blank lines
