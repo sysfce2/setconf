@@ -350,7 +350,9 @@ def changefile(filename, key, value, dummyrun=False, define=False, uncomment_fir
     elif not data.endswith(NL):
         final_nl = False
     # Change and write the file
-    if uncomment_first:
+    if undefine:
+        changed_contents = NL.join(comment_out_define(lines, key))
+    elif uncomment_first:
         changed_contents = NL.join(change(uncomment(lines, key), key, value, define=define))
     else:
         changed_contents = NL.join(change(lines, key, value, define=define))
@@ -906,6 +908,7 @@ def main(args=argv[1:]):
             print("\t-a or --add\t\tadd the option if it doesn't exist")
             print("\t\t\t\tcreates the file if needed")
             print("\t-d or --define\t\tset a #define")
+            print("\t-D or --undefine\tcomment out a #define")
             print("\t-u or --uncomment\tuncomment the line first")
             print("")
             print("Examples:")
@@ -924,11 +927,13 @@ def main(args=argv[1:]):
 
     # more than one argument or flag given
 
-    flags = {"define": False, "add": False, "uncomment": False}
+    flags = {"define": False, "add": False, "uncomment": False, "undefine": False}
     parsed_args = []
     for arg in args:
         if arg == "-d" or arg == "--define":
             flags["define"] = True
+        elif arg == "-D" or arg == "--undefine":
+            flags["undefine"] = True
         elif arg == "-a" or arg == "--add":
             flags["add"] = True
         elif arg == "-u" or arg == "--uncomment":
@@ -1010,6 +1015,11 @@ def main(args=argv[1:]):
 
             # Change the #define value in the file
             changefile(filename, key, value, define=True)
+        elif flags["undefine"]:
+            filename = parsed_args[0]
+            key = bs(parsed_args[1])
+            # Comment out the #define line
+            changefile(filename, key, b"", undefine=True)
         elif flags["uncomment"]:
             filename = parsed_args[0]
             keyvalue = bs(parsed_args[1])
