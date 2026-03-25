@@ -151,13 +151,19 @@ def test_changeline():
         "/nice/pants") == b"TMPROOT=/nice/pants"
     passes = passes and changeline("    # ost = 2", "3") == b"    # ost = 2"
 
-    # The above passes, except for the first one
-
     passes = passes and changeline("  ost = 2", "3") == b"  ost = 3"
     passes = passes and changeline("   /* ost = 2 */", "3") == b"   /* ost = 2 */"
     passes = passes and changeline("æøå =>\t123", "256") == bs("æøå =>\t256")
     passes = passes and changeline("name=value # comment: whatever", "newvalue") == bs("name=newvalue")
     passes = passes and changeline("name=value // comment: whatever", "newvalue") == bs("name=newvalue")
+    # Key whose name contains 'is' must not be split on it
+    passes = passes and changeline("disable=true", "false") == b"disable=false"
+    # ' is ' as assignment operator (Linux kernel style)
+    passes = passes and changeline("X is Y", "Z") == b"X=Z"
+    # URL values must not be truncated at '//'
+    passes = passes and changeline("url=http://example.com", "http://other.com") == b"url=http://other.com"
+    # Hex color values must not be truncated at '#'
+    passes = passes and changeline("color=#ff0000", "#00ff00") == b"color=#00ff00"
     print("Changeline passes: %s" % (passes))
     return passes
 
@@ -282,7 +288,44 @@ def test_change_define():
     return passes
 
 
-def changefile(filename, key, value, dummyrun=False, define=False, uncomment_first=False):
+def comment_out_define(lines, key):
+    key = bs(key)
+    newlines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(b"#define") and len(stripped.split()) >= 2:
+            if stripped.split()[1] == key:
+                pos = line.find(b"#")
+                newlines.append(line[:pos] + b"// " + line[pos:])
+                continue
+        newlines.append(line)
+    return newlines
+
+
+def test_comment_out_define():
+    passes = True
+
+    testcontent = b"#define X 12"
+    testcontent_changed = b"// #define X 12"
+    output = comment_out_define([testcontent], b"X")[0]
+    passes = passes and output == testcontent_changed
+
+    # Leading whitespace must be preserved before '//'
+    testcontent = b"   #define   X    12"
+    testcontent_changed = b"   // #define   X    12"
+    output = comment_out_define([testcontent], b"X")[0]
+    passes = passes and output == testcontent_changed
+
+    # Unrelated defines must not be touched
+    testcontent = b"#define Y 12"
+    output = comment_out_define([testcontent], b"X")[0]
+    passes = passes and output == testcontent
+
+    print("Comment out define passes: %s" % (passes))
+    return passes
+
+
+def changefile(filename, key, value, dummyrun=False, define=False, uncomment_first=False, undefine=False):
     """if dummyrun==True, don't write but return True if changes would have been made"""
 
     key = bs(key)
@@ -424,6 +467,20 @@ def test_changefile_uncomment_kernel():
     passes = True
     passes = passes and newcontent == testcontent_changed.split(NL)[:-1]
     print("Changefile kernel config passes: %s" % (passes))
+    return passes
+
+
+def test_changefile_undefine():
+    testcontent = b"#define A 1\n#define B 2\n#define C 3\n"
+    testcontent_changed = b"#define A 1\n// #define B 2\n#define C 3\n"
+    filename = mkstemp()[1]
+    with open(filename, 'wb') as f:
+        f.write(testcontent)
+    changefile(filename, "B", "", undefine=True)
+    with open(filename, 'rb') as f:
+        newcontent = f.read()
+    passes = newcontent == testcontent_changed
+    print("Changefile undefine passes: %s" % (passes))
     return passes
 
 
@@ -708,6 +765,35 @@ def test_latin1():
     return passes
 
 
+def test_has_key_get_value():
+    passes = True
+    # Last line must not be dropped when file has no trailing newline
+    data = b"a=1" + NL + b"b=2"
+    passes = passes and has_key(data, b"b")
+    passes = passes and get_value(data, b"b") == b"2"
+    # Single line without trailing newline
+    data = b"x=42"
+    passes = passes and has_key(data, b"x")
+    passes = passes and get_value(data, b"x") == b"42"
+    print("Key checks passes: %s" % (passes))
+    return passes
+
+
+def test_addtofile_no_trailing_newline():
+    # A file with no trailing newline must not have its last line dropped
+    testcontent = b"a=1" + NL + b"b=2"
+    testcontent_changed = b"a=1" + NL + b"b=2" + NL + b"c=3" + NL
+    filename = mkstemp()[1]
+    with open(filename, 'wb') as f:
+        f.write(testcontent)
+    addtofile(filename, b"c=3")
+    with open(filename, 'rb') as f:
+        newcontent = f.read()
+    passes = newcontent == testcontent_changed
+    print("No trailing newline passes: %s" % (passes))
+    return passes
+
+
 def tests():
     # If one test fails, the rest will not be run
     passes = True
@@ -722,6 +808,10 @@ def tests():
     passes = passes and test_uncomment()
     passes = passes and test_changefile_uncomment()
     passes = passes and test_changefile_uncomment_kernel()
+    passes = passes and test_comment_out_define()
+    passes = passes and test_changefile_undefine()
+    passes = passes and test_has_key_get_value()
+    passes = passes and test_addtofile_no_trailing_newline()
     if passes:
         print("All tests pass!")
     else:
