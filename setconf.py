@@ -27,6 +27,7 @@
 # Nov 2017
 # Feb 2019
 # Jul 2020
+# Mar 2026
 #
 
 from sys import argv
@@ -40,6 +41,22 @@ from base64 import b64decode
 VERSION = "0.7.7"
 
 # TODO: Use optparse or argparse if shedskin is no longer a target.
+
+# Map of flag strings to mode names
+FLAG_MAP = {
+    "-d": "define", "--define": "define",
+    "-D": "undefine", "--undefine": "undefine",
+    "-a": "add", "--add": "add",
+    "-u": "uncomment", "--uncomment": "uncomment",
+}
+
+# Map of mode names back to short flags, for error messages
+MODE_SHORT_FLAG = {
+    "define": "-d",
+    "undefine": "-D",
+    "add": "-a",
+    "uncomment": "-u",
+}
 
 
 def bs(x):
@@ -892,203 +909,214 @@ def dec(startvalue, s):
     return strip_trailing_zeros(result)
 
 
+def print_help():
+    """Print usage information."""
+    print("setconf " + VERSION)
+    print("")
+    print("Changes a key in a text file to a given value")
+    print("")
+    print("Syntax:")
+    print("\tsetconf filename key value [end string for multiline value]")
+    print("")
+    print("Options:")
+    print("\t-h or --help\t\tthis text")
+    print("\t-t or --test\t\tinternal self test")
+    print("\t-v or --version\t\tversion number")
+    print("\t-a or --add\t\tadd the option if it doesn't exist")
+    print("\t\t\t\tcreates the file if needed")
+    print("\t-d or --define\t\tset a #define")
+    print("\t-D or --undefine\tcomment out a #define")
+    print("\t-u or --uncomment\tuncomment the line first")
+    print("")
+    print("Examples:")
+    print("\tsetconf Makefile.defaults NETSURF_USE_HARU_PDF NO")
+    print("\tsetconf Makefile CC clang")
+    print("\tsetconf my.conf x=42")
+    print("\tsetconf PKGBUILD sha256sums \"('123abc' 'abc123')\" ')'")
+    print("\tsetconf app.py NUMS \"[1, 2, 3]\" ']'")
+    print("\tsetconf -a server.conf ABC 123")
+    print("\tsetconf -d linux/printk.h CONSOLE_LOGLEVEL_DEFAULT=4")
+    print("\tsetconf -u kernel_config CONFIG_MAGIC_SYSRQ=y")
+    print("")
+
+
+def split_keyvalue(keyvalue):
+    """Split a 'key=value' byte string into (key, value, assignment).
+    Returns (None, None, b'') if no assignment is found."""
+    keyvalue = bs(keyvalue)
+    for ass in ASSIGNMENTS:
+        if ass in keyvalue:
+            key = firstpart(keyvalue, False)
+            _, value = keyvalue.split(ass, 1)
+            return key, value, ass
+    return None, None, b""
+
+
+def read_file_data(filename):
+    """Read and return the contents of a file, or exit with an error."""
+    try:
+        with open(filename, 'rb') as f:
+            return f.read()
+    except IOError:
+        print("Can't read %s" % (filename))
+        sysexit(2)
+
+
+def parse_args(args):
+    """Parse command line arguments into a mode string and positional args.
+    Returns the mode string (or None) and the list of positional args.
+    Calls sysexit for errors. Returns mode "help", "version" or "test"
+    for the corresponding flags, so the caller can handle them."""
+    mode = None
+    positional = []
+    end_of_flags = False
+    for arg in args:
+        if end_of_flags:
+            positional.append(arg)
+        elif arg == "--":
+            end_of_flags = True
+        elif arg in ["-h", "--help"]:
+            return "help", []
+        elif arg in ["-v", "--version"]:
+            return "version", []
+        elif arg in ["-t", "--test"]:
+            return "test", []
+        elif arg in FLAG_MAP:
+            new_mode = FLAG_MAP[arg]
+            if mode is not None and mode != new_mode:
+                print("Conflicting flags: %s and %s" % (MODE_SHORT_FLAG[mode], MODE_SHORT_FLAG[new_mode]))
+                sysexit(1)
+            mode = new_mode
+        elif arg.startswith("-") and len(arg) > 1:
+            print("Unknown option: %s" % (arg))
+            sysexit(1)
+        else:
+            positional.append(arg)
+    return mode, positional
+
+
 def main(args=argv[1:]):
-    if len(args) == 1:
-        if args[0] in ["-t", "--test"]:
-            tests()
-        elif args[0] in ["-h", "--help"]:
-            print("setconf " + VERSION)
-            print("")
-            print("Changes a key in a text file to a given value")
-            print("")
-            print("Syntax:")
-            print("\tsetconf filename key value [end string for multiline value]")
-            print("")
-            print("Options:")
-            print("\t-h or --help\t\tthis text")
-            print("\t-t or --test\t\tinternal self test")
-            print("\t-v or --version\t\tversion number")
-            print("\t-a or --add\t\tadd the option if it doesn't exist")
-            print("\t\t\t\tcreates the file if needed")
-            print("\t-d or --define\t\tset a #define")
-            print("\t-D or --undefine\tcomment out a #define")
-            print("\t-u or --uncomment\tuncomment the line first")
-            print("")
-            print("Examples:")
-            print("\tsetconf Makefile.defaults NETSURF_USE_HARU_PDF NO")
-            print("\tsetconf Makefile CC clang")
-            print("\tsetconf my.conf x=42")
-            print("\tsetconf PKGBUILD sha256sums \"('123abc' 'abc123')\" ')'")
-            print("\tsetconf app.py NUMS \"[1, 2, 3]\" ']'")
-            print("\tsetconf -a server.conf ABC 123")
-            print("\tsetconf -d linux/printk.h CONSOLE_LOGLEVEL_DEFAULT=4")
-            print("\tsetconf -u kernel_config CONFIG_MAGIC_SYSRQ=y")
-            print("")
-        elif args[0] in ["-v", "--version"]:
-            print(VERSION)
+    mode, positional = parse_args(args)
+    nargs = len(positional)
+
+    # Handle informational flags
+    if mode == "help":
+        print_help()
+        return
+    elif mode == "version":
+        print(VERSION)
+        return
+    elif mode == "test":
+        tests()
         return
 
-    # more than one argument or flag given
-
-    flags = {"define": False, "add": False, "uncomment": False, "undefine": False}
-    parsed_args = []
-    for arg in args:
-        if arg == "-d" or arg == "--define":
-            flags["define"] = True
-        elif arg == "-D" or arg == "--undefine":
-            flags["undefine"] = True
-        elif arg == "-a" or arg == "--add":
-            flags["add"] = True
-        elif arg == "-u" or arg == "--uncomment":
-            flags["uncomment"] = True
+    if nargs < 2:
+        if nargs == 0 and mode is None:
+            print_help()
         else:
-            parsed_args.append(arg)
+            print("Not enough arguments. Try --help.")
+        sysexit(1)
 
-    has_flags = True in flags.values()
+    filename = positional[0]
 
-    if not has_flags and len(parsed_args) == 2:
-        # Single line replace: "x=123" or "x+=2"
-        filename = parsed_args[0]
-        keyvalue = bs(parsed_args[1])
-        if b"+=" in keyvalue:
-            key, value = keyvalue.split(b"+=", 1)
-            try:
-                with open(filename, 'rb') as f:
-                    data = f.read()
-            except IOError:
-                print("Can't read %s" % (filename))
+    # Multiline replace: 4 positional args
+    if nargs == 4:
+        key = bs(positional[1])
+        value = bs(positional[2])
+        endstring = bs(positional[3])
+        changefile_multiline(filename, key, value, endstring)
+        return
+
+    if nargs > 4:
+        print("Too many arguments. Try --help.")
+        sysexit(1)
+
+    # No mode: plain set
+    if mode is None:
+        if nargs == 2:
+            # Single line replace: "x=123" or "x+=2" or "x-=1"
+            keyvalue = bs(positional[1])
+            if b"+=" in keyvalue:
+                key, value = keyvalue.split(b"+=", 1)
+                datavalue = get_value(read_file_data(filename), key)
+                changefile(filename, key, inc(datavalue, value))
+            elif b"-=" in keyvalue:
+                key, value = keyvalue.split(b"-=", 1)
+                datavalue = get_value(read_file_data(filename), key)
+                changefile(filename, key, dec(datavalue, value))
+            elif b"=" in keyvalue:
+                key, value = keyvalue.split(b"=", 1)
+                changefile(filename, key, value)
+            else:
+                print("No assignment found in: %s" % (positional[1]))
                 sysexit(2)
-            datavalue = get_value(data, key)
-            changefile(filename, key, inc(datavalue, value))
-        elif b"-=" in keyvalue:
-            key, value = keyvalue.split(b"-=", 1)
-            try:
-                with open(filename, 'rb') as f:
-                    data = f.read()
-            except IOError:
-                print("Can't read %s" % (filename))
+        elif nargs == 3:
+            # Single line replace: filename key value
+            changefile(filename, bs(positional[1]), bs(positional[2]))
+        return
+
+    # Add mode
+    if mode == "add":
+        create_if_missing(filename)
+        if nargs == 2:
+            keyvalue = bs(positional[1])
+            key, value, ass = split_keyvalue(keyvalue)
+            if key is None:
+                print("No assignment found in: %s" % (positional[1]))
                 sysexit(2)
-            datavalue = get_value(data, key)
-            changefile(filename, key, dec(datavalue, value))
-        elif b"=" in keyvalue:
-            key, value = keyvalue.split(b"=", 1)
-            changefile(filename, key, value)
-        else:
-            sysexit(2)
-    elif has_flags and len(parsed_args) == 2:
-        if flags["add"]:
-            # Single line replace/add ("x 123")
-            filename = parsed_args[0]
-            keyvalue = bs(parsed_args[1])
-
-            create_if_missing(filename)
-
-            assignment = None
-            for ass in ASSIGNMENTS:
-                if ass in keyvalue:
-                    assignment = ass
-                    break
-            if not assignment:
-                sysexit(2)
-            _, value = keyvalue.split(assignment, 1)
-            key = firstpart(keyvalue, False)
-
-            # Change the file if possible, if not, add the key value
             if changefile(filename, key, value, dummyrun=True):
                 changefile(filename, key, value)
             else:
-                with open(filename, 'rb') as f:
-                    data = f.read()
+                data = read_file_data(filename)
                 if not has_key(data, key):
                     addtofile(filename, keyvalue)
-        elif flags["define"]:
-            filename = parsed_args[0]
-            keyvalue = bs(parsed_args[1])
-
-            assignment = None
-            for ass in ASSIGNMENTS:
-                if ass in keyvalue:
-                    assignment = ass
-                    break
-            if not assignment:
-                sysexit(2)
-
-            _, value = keyvalue.split(assignment, 1)
-            key = firstpart(keyvalue, False)
-
-            # Change the #define value in the file
-            changefile(filename, key, value, define=True)
-        elif flags["undefine"]:
-            filename = parsed_args[0]
-            key = bs(parsed_args[1])
-            # Comment out the #define line
-            changefile(filename, key, b"", undefine=True)
-        elif flags["uncomment"]:
-            filename = parsed_args[0]
-            keyvalue = bs(parsed_args[1])
-
-            assignment = None
-            for ass in ASSIGNMENTS:
-                if ass in keyvalue:
-                    assignment = ass
-                    break
-            if not assignment:
-                # No assigment symbol, use the argument as the key
-                key = keyvalue
-                # Uncomment the given key
-                changefile(filename, key, "", uncomment_first=True)
-            else:
-                # Split keyvalue on the assignment symbol to get a key and a value
-                _, value = keyvalue.split(assignment, 1)
-                key = firstpart(keyvalue, False)
-                # Uncomment the key in the file, then try to set the value
-                changefile(filename, key, value, uncomment_first=True)
-    elif not has_flags and len(parsed_args) == 3:
-        # Single line replace ("x 123")
-        filename = parsed_args[0]
-        key = bs(parsed_args[1])
-        value = bs(parsed_args[2])
-        changefile(filename, key, value)
-    elif has_flags and len(parsed_args) == 3:
-        if flags["add"]:
-            filename = parsed_args[0]
-            key = bs(parsed_args[1])
-            value = bs(parsed_args[2])
-
-            create_if_missing(filename)
-
-            # Change the file if possible, if not, add the key value
+        elif nargs == 3:
+            key = bs(positional[1])
+            value = bs(positional[2])
             if changefile(filename, key, value, dummyrun=True):
                 changefile(filename, key, value)
             else:
                 keyvalue = key + b"=" + value
-                with open(filename, 'rb') as f:
-                    data = f.read()
+                data = read_file_data(filename)
                 if not has_key(data, key):
                     addtofile(filename, keyvalue)
-        elif flags["uncomment"]:
-            filename = parsed_args[0]
-            key = bs(parsed_args[1])
-            value = bs(parsed_args[2])
+        return
 
-            # Uncomment the key in the file, then try to set the value
-            changefile(filename, key, value, uncomment_first=True)
-    elif not has_flags and len(parsed_args) == 4:
-        # Multiline replace
-        filename = parsed_args[0]
-        key = bs(parsed_args[1])
-        value = bs(parsed_args[2])
-        endstring = bs(parsed_args[3])
-        changefile_multiline(filename, key, value, endstring)
-    elif has_flags and len(parsed_args) == 4:
-        # Multiline replace
-        filename = parsed_args[0]
-        key = bs(parsed_args[1])
-        value = bs(parsed_args[2])
-        endstring = bs(parsed_args[3])
-        changefile_multiline(filename, key, value, endstring)
-    else:
-        sysexit(1)
+    # Define mode
+    if mode == "define":
+        if nargs == 2:
+            keyvalue = bs(positional[1])
+            key, value, ass = split_keyvalue(keyvalue)
+            if key is None:
+                print("No assignment found in: %s" % (positional[1]))
+                sysexit(2)
+            changefile(filename, key, value, define=True)
+        elif nargs == 3:
+            changefile(filename, bs(positional[1]), bs(positional[2]), define=True)
+        return
+
+    # Undefine mode
+    if mode == "undefine":
+        if nargs == 2:
+            changefile(filename, bs(positional[1]), b"", undefine=True)
+        else:
+            print("--undefine takes exactly 2 arguments: filename key")
+            sysexit(1)
+        return
+
+    # Uncomment mode
+    if mode == "uncomment":
+        if nargs == 2:
+            keyvalue = bs(positional[1])
+            key, value, ass = split_keyvalue(keyvalue)
+            if key is None:
+                # No assignment symbol, use the argument as the key
+                changefile(filename, keyvalue, b"", uncomment_first=True)
+            else:
+                changefile(filename, key, value, uncomment_first=True)
+        elif nargs == 3:
+            changefile(filename, bs(positional[1]), bs(positional[2]), uncomment_first=True)
+        return
 
 
 if __name__ == "__main__":
